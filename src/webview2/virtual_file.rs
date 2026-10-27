@@ -15,7 +15,7 @@ use std::{
   },
 };
 use windows::{
-  core::{implement, IUnknown, Interface, Ref, Result, BOOL, HRESULT, PWSTR},
+  core::{implement, Ref, Result, HRESULT, PWSTR},
   Win32::{
     Foundation::*,
     System::{Com::*, DataExchange::RegisterClipboardFormatW, Memory::*, Ole::*},
@@ -46,25 +46,6 @@ pub(super) struct Session {
   ready: AtomicBool,
 }
 
-// Hold the identity itself, not just its address: a destination can retain a
-// stream after the browser object dies, and COM addresses can then be reused.
-pub(super) type ActiveSource = std::rc::Rc<std::cell::RefCell<Option<Source>>>;
-
-pub(super) struct Source {
-  original: IDataObject,
-  html: IDataObject,
-}
-impl Source {
-  pub fn new(original: IDataObject, formats: Formats) -> Self {
-    let html = HtmlDataView {
-      original: original.clone(),
-      formats,
-    }
-    .into();
-    Self { original, html }
-  }
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct Formats {
   pub descriptor: u16,
@@ -82,7 +63,7 @@ impl Formats {
       contents,
     })
   }
-  pub fn hides(&self, format: u16) -> bool {
+  pub fn contains(&self, format: u16) -> bool {
     format == self.descriptor || format == self.contents
   }
 }
@@ -143,7 +124,7 @@ pub(super) fn install(
       break;
     }
     hr.ok()?;
-    let collision = formats.hides(entry.cfFormat);
+    let collision = formats.contains(entry.cfFormat);
     unsafe {
       CoTaskMemFree(Some(entry.ptd.cast()));
     }
@@ -406,155 +387,6 @@ impl IStream_Impl for LazyStream_Impl {
         session: self.session.clone(),
         index: self.index,
         position: Mutex::new(*self.position.lock().map_err(|_| E_FAIL)?),
-      }
-      .into(),
-    )
-  }
-}
-
-/// Hide only our added formats on a return to the exact originating webview.
-/// Identity is compared through IUnknown, never a MIME value from an app.
-pub(super) fn for_self_drop(data: &IDataObject, active: &ActiveSource) -> Result<IDataObject> {
-  if let Some(source) = active.borrow().as_ref() {
-    if data.cast::<IUnknown>()? == source.original.cast::<IUnknown>()? {
-      // DragEnter and Drop must see the same COM object, just as in the working
-      // probe. Rebuilding the wrapper on each callback changes its identity.
-      return Ok(source.html.clone());
-    }
-  }
-  Ok(data.clone())
-}
-
-// These objects delegate to browser COM objects owned by the source STA.
-#[implement(IDataObject, Agile = false)]
-struct HtmlDataView {
-  original: IDataObject,
-  formats: Formats,
-}
-impl HtmlDataView {
-  fn visible(&self, f: *const FORMATETC) -> Result<()> {
-    if f.is_null() {
-      return Err(E_POINTER.into());
-    }
-    if self.formats.hides(unsafe { (*f).cfFormat }) {
-      Err(DV_E_FORMATETC.into())
-    } else {
-      Ok(())
-    }
-  }
-}
-impl IDataObject_Impl for HtmlDataView_Impl {
-  fn GetData(&self, f: *const FORMATETC) -> Result<STGMEDIUM> {
-    self.visible(f)?;
-    unsafe { self.original.GetData(f) }
-  }
-  fn GetDataHere(&self, f: *const FORMATETC, m: *mut STGMEDIUM) -> Result<()> {
-    self.visible(f)?;
-    unsafe { self.original.GetDataHere(f, m) }
-  }
-  fn QueryGetData(&self, f: *const FORMATETC) -> HRESULT {
-    match self.visible(f) {
-      Ok(()) => unsafe { self.original.QueryGetData(f) },
-      Err(e) => e.code(),
-    }
-  }
-  fn GetCanonicalFormatEtc(&self, f: *const FORMATETC, out: *mut FORMATETC) -> HRESULT {
-    match self.visible(f) {
-      Ok(()) => unsafe { self.original.GetCanonicalFormatEtc(f, out) },
-      Err(e) => e.code(),
-    }
-  }
-  fn SetData(&self, f: *const FORMATETC, m: *const STGMEDIUM, release: BOOL) -> Result<()> {
-    self.visible(f)?;
-    unsafe { self.original.SetData(f, m, release.as_bool()) }
-  }
-  fn EnumFormatEtc(&self, direction: u32) -> Result<IEnumFORMATETC> {
-    let original = unsafe { self.original.EnumFormatEtc(direction)? };
-    if direction == DATADIR_GET.0 as u32 {
-      Ok(
-        HtmlFormats {
-          original,
-          formats: self.formats,
-        }
-        .into(),
-      )
-    } else {
-      Ok(original)
-    }
-  }
-  fn DAdvise(&self, f: *const FORMATETC, flags: u32, sink: Ref<IAdviseSink>) -> Result<u32> {
-    self.visible(f)?;
-    unsafe { self.original.DAdvise(f, flags, sink.as_ref()) }
-  }
-  fn DUnadvise(&self, connection: u32) -> Result<()> {
-    unsafe { self.original.DUnadvise(connection) }
-  }
-  fn EnumDAdvise(&self) -> Result<IEnumSTATDATA> {
-    unsafe { self.original.EnumDAdvise() }
-  }
-}
-
-#[implement(IEnumFORMATETC, Agile = false)]
-struct HtmlFormats {
-  original: IEnumFORMATETC,
-  formats: Formats,
-}
-impl IEnumFORMATETC_Impl for HtmlFormats_Impl {
-  fn Next(&self, count: u32, out: *mut FORMATETC, fetched: *mut u32) -> HRESULT {
-    unsafe {
-      if !fetched.is_null() {
-        *fetched = 0;
-      }
-    }
-    if out.is_null() || (fetched.is_null() && count != 1) {
-      return E_POINTER;
-    }
-    let mut done = 0;
-    while done < count {
-      let mut entry = FORMATETC::default();
-      let hr = unsafe { self.original.Next(std::slice::from_mut(&mut entry), None) };
-      if hr != S_OK {
-        return hr;
-      }
-      if self.formats.hides(entry.cfFormat) {
-        unsafe {
-          CoTaskMemFree(Some(entry.ptd.cast()));
-        }
-        continue;
-      }
-      unsafe {
-        out.add(done as usize).write(entry);
-      }
-      done += 1;
-      unsafe {
-        if !fetched.is_null() {
-          *fetched = done;
-        }
-      }
-    }
-    S_OK
-  }
-  fn Skip(&self, count: u32) -> Result<()> {
-    for _ in 0..count {
-      let mut entry = FORMATETC::default();
-      let hr = self.Next(1, &mut entry, ptr::null_mut());
-      if hr != S_OK {
-        return Err(windows::core::Error::from_hresult(hr));
-      }
-      unsafe {
-        CoTaskMemFree(Some(entry.ptd.cast()));
-      }
-    }
-    Ok(())
-  }
-  fn Reset(&self) -> Result<()> {
-    unsafe { self.original.Reset() }
-  }
-  fn Clone(&self) -> Result<IEnumFORMATETC> {
-    Ok(
-      HtmlFormats {
-        original: unsafe { self.original.Clone()? },
-        formats: self.formats,
       }
       .into(),
     )

@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use super::virtual_file::{self, ActiveSource, Formats, Source, WebView2VirtualFile};
-use std::{cell::RefCell, rc::Rc};
-use webview2_com::{
-  DragStartingEventHandler, Microsoft::Web::WebView2::Win32::*, NavigationStartingEventHandler,
-};
+use super::virtual_file::{self, Formats, WebView2VirtualFile};
+use std::rc::Rc;
+use webview2_com::{DragStartingEventHandler, Microsoft::Web::WebView2::Win32::*};
 use windows::{
   core::{implement, Interface, Ref, Result},
   Win32::{
@@ -24,7 +22,6 @@ pub(super) struct Registration {
   hwnd: HWND,
   source: Option<(ICoreWebView2CompositionController5, i64)>,
   registered: bool,
-  navigation: Option<(ICoreWebView2, i64)>,
 }
 impl Registration {
   pub unsafe fn new(
@@ -39,23 +36,18 @@ impl Registration {
       hwnd,
       source: None,
       registered: false,
-      navigation: None,
     };
-    let active: ActiveSource = Rc::new(RefCell::new(None));
     if let Some(handler) = handler {
       let source: ICoreWebView2CompositionController5 = controller.cast()?;
-      let state = active.clone();
       let mut token = 0;
       source.add_DragStarting(
         &DragStartingEventHandler::create(Box::new(move |_, args| {
           let args = args.ok_or(E_POINTER)?;
-          state.borrow_mut().take();
           let result = (|| {
             let data = unsafe { args.Data()? };
             let files = handler(&data)?;
             if !files.is_empty() {
               virtual_file::install(&data, files, formats)?;
-              *state.borrow_mut() = Some(Source::new(data, formats));
             }
             // In particular, do not call DoDragDrop or claim Handled here.
             unsafe { args.SetHandled(false) }
@@ -70,23 +62,10 @@ impl Registration {
         &mut token,
       )?;
       registration.source = Some((source, token));
-      let webview = controller
-        .cast::<ICoreWebView2Controller>()?
-        .CoreWebView2()?;
-      let state = active.clone();
-      webview.add_NavigationStarting(
-        &NavigationStartingEventHandler::create(Box::new(move |_, _| {
-          state.borrow_mut().take();
-          Ok(())
-        })),
-        &mut token,
-      )?;
-      registration.navigation = Some((webview, token));
     }
     let target: IDropTarget = BrowserTarget {
       hwnd,
       controller: target_controller,
-      active,
     }
     .into();
     RegisterDragDrop(hwnd, &target)?;
@@ -103,20 +82,16 @@ impl Drop for Registration {
       if let Some((source, token)) = self.source.take() {
         let _ = source.remove_DragStarting(token);
       }
-      if let Some((webview, token)) = self.navigation.take() {
-        let _ = webview.remove_NavigationStarting(token);
-      }
       OleUninitialize();
     }
   }
 }
 
-// Rc/RefCell state and the WebView2 controller are apartment-bound.
+// The WebView2 controller is apartment-bound.
 #[implement(IDropTarget, Agile = false)]
 struct BrowserTarget {
   hwnd: HWND,
   controller: ICoreWebView2CompositionController3,
-  active: ActiveSource,
 }
 impl BrowserTarget {
   fn point(&self, p: &POINTL) -> POINT {
@@ -138,11 +113,11 @@ impl IDropTarget_Impl for BrowserTarget_Impl {
     if effect.is_null() {
       return Err(E_POINTER.into());
     }
-    let data = virtual_file::for_self_drop(data.as_ref().ok_or(E_POINTER)?, &self.active)?;
+    let data = data.as_ref().ok_or(E_POINTER)?;
     unsafe {
       self
         .controller
-        .DragEnter(&data, keys.0, self.point(point), effect.cast())
+        .DragEnter(data, keys.0, self.point(point), effect.cast())
     }
   }
   fn DragOver(
@@ -173,11 +148,11 @@ impl IDropTarget_Impl for BrowserTarget_Impl {
     if effect.is_null() {
       return Err(E_POINTER.into());
     }
-    let data = virtual_file::for_self_drop(data.as_ref().ok_or(E_POINTER)?, &self.active)?;
+    let data = data.as_ref().ok_or(E_POINTER)?;
     unsafe {
       self
         .controller
-        .Drop(&data, keys.0, self.point(point), effect.cast())
+        .Drop(data, keys.0, self.point(point), effect.cast())
     }
   }
 }

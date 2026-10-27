@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 use super::*;
+use windows::core::Interface;
 use std::sync::atomic::AtomicUsize;
 
 fn fixture(calls: Arc<AtomicUsize>) -> WebView2VirtualFile {
@@ -116,7 +117,7 @@ fn virtual_names_cannot_escape_the_destination() {
 }
 
 #[test]
-fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
+fn shell_object_installation_preserves_text_and_stream_outlives_source() {
   unsafe {
     OleInitialize(None).unwrap();
     {
@@ -138,59 +139,16 @@ fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
       let lifetime = install(&original, vec![fixture(calls.clone())], formats).unwrap();
       assert!(lifetime.upgrade().is_some());
       assert_eq!(calls.load(Ordering::Relaxed), 0);
-      let active = RcActive::new(std::cell::RefCell::new(Some(Source::new(
-        original.clone(),
-        formats,
-      ))));
-      let html = for_self_drop(&original, &active).unwrap();
-      assert!(
-        html.cast::<IAgileObject>().is_err(),
-        "Browser data is owned by the source STA"
-      );
-      assert_eq!(
-        html.cast::<IUnknown>().unwrap(),
-        for_self_drop(&original, &active)
-          .unwrap()
-          .cast::<IUnknown>()
-          .unwrap(),
-        "DragEnter and Drop must receive one stable self-view identity"
-      );
       let content = format(formats.contents, TYMED_ISTREAM, 0);
-      assert_eq!(html.QueryGetData(&content), DV_E_FORMATETC);
-      let mut medium = html.GetData(&text).unwrap();
+      let mut medium = original.GetData(&text).unwrap();
       let p = GlobalLock(medium.u.hGlobal).cast::<u16>();
       assert!(!p.is_null());
       assert_eq!(*p, b'A' as u16);
       let _ = GlobalUnlock(medium.u.hGlobal);
       ReleaseStgMedium(&mut medium);
-      let formats_html = html.EnumFormatEtc(DATADIR_GET.0 as u32).unwrap();
-      assert!(formats_html.cast::<IAgileObject>().is_err());
-      let mut has_text = false;
-      loop {
-        let mut entry = FORMATETC::default();
-        let hr = formats_html.Next(std::slice::from_mut(&mut entry), None);
-        if hr == S_FALSE {
-          break;
-        }
-        hr.ok().unwrap();
-        assert!(!formats.hides(entry.cfFormat));
-        has_text |= entry.cfFormat == CF_UNICODETEXT.0;
-        CoTaskMemFree(Some(entry.ptd.cast()));
-      }
-      assert!(has_text);
-      let unrelated: IDataObject = SHCreateDataObject(None, None, None).unwrap();
-      assert_eq!(
-        for_self_drop(&unrelated, &active)
-          .unwrap()
-          .cast::<IUnknown>()
-          .unwrap(),
-        unrelated.cast::<IUnknown>().unwrap()
-      );
       let mut medium = original.GetData(&content).unwrap();
       let stream = medium.u.pstm.as_ref().unwrap().clone();
       ReleaseStgMedium(&mut medium);
-      active.borrow_mut().take();
-      drop(html);
       drop(original);
       let mut out = [0; 6];
       assert_eq!(read(&stream, &mut out), (S_OK, 6));
@@ -202,7 +160,6 @@ fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
     OleUninitialize();
   }
 }
-use std::rc::Rc as RcActive;
 
 #[test]
 fn delayed_stream_can_marshal_to_another_process_without_reading() {
