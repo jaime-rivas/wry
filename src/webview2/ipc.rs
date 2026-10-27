@@ -19,9 +19,11 @@ use windows::{
 ///
 /// The result contains one path per attached file, in the same order, or the
 /// error encountered while reading the objects. It never contains a partial
-/// list. Non-file objects and files without native backing (such as JavaScript
-/// `new File(...)`) produce an error. A missing or empty native path is reported
-/// as `E_INVALIDARG`.
+/// list. WebView2 rejects JavaScript-created files without disk backing in
+/// `postMessageWithAdditionalObjects`, before an IPC message reaches Rust.
+/// For objects delivered to Rust, a failed file-interface query or path getter
+/// is preserved in this result. A missing or empty native path is reported as
+/// `E_INVALIDARG`.
 ///
 /// These paths come from the objects attached to this message, not from its
 /// string body. They do not prove a trusted drop or grant filesystem permission.
