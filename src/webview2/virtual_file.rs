@@ -48,7 +48,22 @@ pub(super) struct Session {
 
 // Hold the identity itself, not just its address: a destination can retain a
 // stream after the browser object dies, and COM addresses can then be reused.
-pub(super) type ActiveSource = std::rc::Rc<std::cell::RefCell<Option<IDataObject>>>;
+pub(super) type ActiveSource = std::rc::Rc<std::cell::RefCell<Option<Source>>>;
+
+pub(super) struct Source {
+  original: IDataObject,
+  html: IDataObject,
+}
+impl Source {
+  pub fn new(original: IDataObject, formats: Formats) -> Self {
+    let html = HtmlDataView {
+      original: original.clone(),
+      formats,
+    }
+    .into();
+    Self { original, html }
+  }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct Formats {
@@ -210,7 +225,9 @@ pub(super) fn install(
   Ok(Arc::downgrade(&session))
 }
 
-#[implement(IStream)]
+// Match the classic COM stream contract used by the standalone probe. Do not
+// opt into windows-rs's automatic agile/WinRT marshaler for an OLE drag stream.
+#[implement(IStream, Agile = false)]
 struct LazyStream {
   session: Arc<Session>,
   index: usize,
@@ -397,31 +414,19 @@ impl IStream_Impl for LazyStream_Impl {
 
 /// Hide only our added formats on a return to the exact originating webview.
 /// Identity is compared through IUnknown, never a MIME value from an app.
-pub(super) fn for_self_drop(
-  data: &IDataObject,
-  active: &ActiveSource,
-  formats: Formats,
-) -> Result<IDataObject> {
-  let own = active.borrow().as_ref().is_some_and(|original| {
-    match (data.cast::<IUnknown>(), original.cast::<IUnknown>()) {
-      (Ok(a), Ok(b)) => a == b,
-      _ => false,
+pub(super) fn for_self_drop(data: &IDataObject, active: &ActiveSource) -> Result<IDataObject> {
+  if let Some(source) = active.borrow().as_ref() {
+    if data.cast::<IUnknown>()? == source.original.cast::<IUnknown>()? {
+      // DragEnter and Drop must see the same COM object, just as in the working
+      // probe. Rebuilding the wrapper on each callback changes its identity.
+      return Ok(source.html.clone());
     }
-  });
-  if own {
-    Ok(
-      HtmlDataView {
-        original: data.clone(),
-        formats,
-      }
-      .into(),
-    )
-  } else {
-    Ok(data.clone())
   }
+  Ok(data.clone())
 }
 
-#[implement(IDataObject)]
+// These objects delegate to browser COM objects owned by the source STA.
+#[implement(IDataObject, Agile = false)]
 struct HtmlDataView {
   original: IDataObject,
   formats: Formats,
@@ -489,7 +494,7 @@ impl IDataObject_Impl for HtmlDataView_Impl {
   }
 }
 
-#[implement(IEnumFORMATETC)]
+#[implement(IEnumFORMATETC, Agile = false)]
 struct HtmlFormats {
   original: IEnumFORMATETC,
   formats: Formats,

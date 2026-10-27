@@ -15,15 +15,16 @@
 <script>
 const mime='application/x-wry-example-item';
 function send(message,files){const text=JSON.stringify(message);document.querySelector('#log').textContent=text+'\n'+document.querySelector('#log').textContent.slice(0,7000);try{window.ipc.postMessage(text,files)}catch(e){document.querySelector('#log').textContent=String(e)+'\n'+text}}
+function payload(e){return {types:Array.from(e.dataTransfer.types),custom:e.dataTransfer.getData(mime),text:e.dataTransfer.getData('text/plain'),effectAllowed:e.dataTransfer.effectAllowed}}
 for(const id of ['source','baseline']){
   const element=document.getElementById(id);
-  element.addEventListener('dragstart',e=>{const identity=id==='source'?'repository:item-1':'baseline:item-1';e.dataTransfer.setData(mime,identity);e.dataTransfer.setData('text/plain',identity);e.dataTransfer.effectAllowed='all';send({action:'dragstart',source:id,trusted:e.isTrusted})});
+  element.addEventListener('dragstart',e=>{const identity=id==='source'?'repository:item-1':'baseline:item-1';e.dataTransfer.setData(mime,identity);e.dataTransfer.setData('text/plain',identity);e.dataTransfer.effectAllowed='all';send({action:'dragstart',source:id,trusted:e.isTrusted,...payload(e)})});
   element.addEventListener('dragend',e=>send({action:'dragend',source:id,trusted:e.isTrusted,effect:e.dataTransfer.dropEffect}));
 }
 function effect(e){return e.ctrlKey&&e.shiftKey?'link':e.ctrlKey?'copy':e.shiftKey?'move':e.dataTransfer.types.includes('Files')?'copy':'move'}
 const target=document.getElementById('target');
 target.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect=effect(e)});
-target.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.dropEffect=effect(e);const files=Array.from(e.dataTransfer.files);send({action:'drop',trusted:e.isTrusted,custom:e.dataTransfer.getData(mime),effect:e.dataTransfer.dropEffect,files:files.map(f=>({name:f.name,size:f.size})),entries:Array.from(e.dataTransfer.items,i=>{const entry=i.webkitGetAsEntry();return entry?{name:entry.name,directory:entry.isDirectory}:null})},files)});
+target.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.dropEffect=effect(e);const files=Array.from(e.dataTransfer.files);send({action:'drop',trusted:e.isTrusted,...payload(e),effect:e.dataTransfer.dropEffect,files:files.map(f=>({name:f.name,size:f.size})),entries:Array.from(e.dataTransfer.items,i=>{const entry=i.webkitGetAsEntry();return entry?{name:entry.name,directory:entry.isDirectory}:null})},files)});
 document.addEventListener('dragover',e=>{if(!target.contains(e.target)){e.preventDefault();e.dataTransfer.dropEffect='none'}});
 document.addEventListener('drop',e=>e.preventDefault());
 send({action:'ready',additionalObjects:typeof window.chrome?.webview?.postMessageWithAdditionalObjects==='function'});

@@ -29,7 +29,11 @@ fn main() -> wry::Result<()> {
   let event_loop = EventLoop::new();
   let window = WindowBuilder::new()
     .with_drag_and_drop(false)
-    .with_title("Wry — unified HTML and virtual-file dragging")
+    .with_title(if remote_mode {
+      "Wry — remote virtual-file test"
+    } else {
+      "Wry — small virtual-file test"
+    })
     .build(&event_loop)
     .unwrap();
   let hwnd = match window.window_handle()?.as_raw() {

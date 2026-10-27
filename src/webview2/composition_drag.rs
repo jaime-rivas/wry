@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use super::virtual_file::{self, ActiveSource, Formats, WebView2VirtualFile};
+use super::virtual_file::{self, ActiveSource, Formats, Source, WebView2VirtualFile};
 use std::{cell::RefCell, rc::Rc};
 use webview2_com::{
   DragStartingEventHandler, Microsoft::Web::WebView2::Win32::*, NavigationStartingEventHandler,
@@ -55,7 +55,7 @@ impl Registration {
             let files = handler(&data)?;
             if !files.is_empty() {
               virtual_file::install(&data, files, formats)?;
-              *state.borrow_mut() = Some(data);
+              *state.borrow_mut() = Some(Source::new(data, formats));
             }
             // In particular, do not call DoDragDrop or claim Handled here.
             unsafe { args.SetHandled(false) }
@@ -87,7 +87,6 @@ impl Registration {
       hwnd,
       controller: target_controller,
       active,
-      formats,
     }
     .into();
     RegisterDragDrop(hwnd, &target)?;
@@ -112,12 +111,12 @@ impl Drop for Registration {
   }
 }
 
-#[implement(IDropTarget)]
+// Rc/RefCell state and the WebView2 controller are apartment-bound.
+#[implement(IDropTarget, Agile = false)]
 struct BrowserTarget {
   hwnd: HWND,
   controller: ICoreWebView2CompositionController3,
   active: ActiveSource,
-  formats: Formats,
 }
 impl BrowserTarget {
   fn point(&self, p: &POINTL) -> POINT {
@@ -139,8 +138,7 @@ impl IDropTarget_Impl for BrowserTarget_Impl {
     if effect.is_null() {
       return Err(E_POINTER.into());
     }
-    let data =
-      virtual_file::for_self_drop(data.as_ref().ok_or(E_POINTER)?, &self.active, self.formats)?;
+    let data = virtual_file::for_self_drop(data.as_ref().ok_or(E_POINTER)?, &self.active)?;
     unsafe {
       self
         .controller
@@ -175,8 +173,7 @@ impl IDropTarget_Impl for BrowserTarget_Impl {
     if effect.is_null() {
       return Err(E_POINTER.into());
     }
-    let data =
-      virtual_file::for_self_drop(data.as_ref().ok_or(E_POINTER)?, &self.active, self.formats)?;
+    let data = virtual_file::for_self_drop(data.as_ref().ok_or(E_POINTER)?, &self.active)?;
     unsafe {
       self
         .controller

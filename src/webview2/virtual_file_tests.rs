@@ -138,8 +138,23 @@ fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
       let lifetime = install(&original, vec![fixture(calls.clone())], formats).unwrap();
       assert!(lifetime.upgrade().is_some());
       assert_eq!(calls.load(Ordering::Relaxed), 0);
-      let active = RcActive::new(std::cell::RefCell::new(Some(original.clone())));
-      let html = for_self_drop(&original, &active, formats).unwrap();
+      let active = RcActive::new(std::cell::RefCell::new(Some(Source::new(
+        original.clone(),
+        formats,
+      ))));
+      let html = for_self_drop(&original, &active).unwrap();
+      assert!(
+        html.cast::<IAgileObject>().is_err(),
+        "Browser data is owned by the source STA"
+      );
+      assert_eq!(
+        html.cast::<IUnknown>().unwrap(),
+        for_self_drop(&original, &active)
+          .unwrap()
+          .cast::<IUnknown>()
+          .unwrap(),
+        "DragEnter and Drop must receive one stable self-view identity"
+      );
       let content = format(formats.contents, TYMED_ISTREAM, 0);
       assert_eq!(html.QueryGetData(&content), DV_E_FORMATETC);
       let mut medium = html.GetData(&text).unwrap();
@@ -149,6 +164,7 @@ fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
       let _ = GlobalUnlock(medium.u.hGlobal);
       ReleaseStgMedium(&mut medium);
       let formats_html = html.EnumFormatEtc(DATADIR_GET.0 as u32).unwrap();
+      assert!(formats_html.cast::<IAgileObject>().is_err());
       let mut has_text = false;
       loop {
         let mut entry = FORMATETC::default();
@@ -164,7 +180,7 @@ fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
       assert!(has_text);
       let unrelated: IDataObject = SHCreateDataObject(None, None, None).unwrap();
       assert_eq!(
-        for_self_drop(&unrelated, &active, formats)
+        for_self_drop(&unrelated, &active)
           .unwrap()
           .cast::<IUnknown>()
           .unwrap(),
@@ -187,6 +203,43 @@ fn shell_object_installation_is_lazy_and_self_drop_hides_only_files() {
   }
 }
 use std::rc::Rc as RcActive;
+
+#[test]
+fn delayed_stream_can_marshal_to_another_process_without_reading() {
+  use windows::Win32::System::Com::{Marshal::*, StructuredStorage::CreateStreamOnHGlobal};
+  unsafe {
+    OleInitialize(None).unwrap();
+    {
+      let calls = Arc::new(AtomicUsize::new(0));
+      let source = stream(fixture(calls.clone()));
+      assert!(source.cast::<IAgileObject>().is_err());
+      assert!(
+        source.cast::<IMarshal>().is_err(),
+        "Use the standard COM marshaler like the working classic-COM probe"
+      );
+      let packet = CreateStreamOnHGlobal(HGLOBAL::default(), true).unwrap();
+      let result = CoMarshalInterface(
+        &packet,
+        &IStream::IID,
+        &source,
+        MSHCTX_LOCAL.0 as u32,
+        None,
+        MSHLFLAGS_NORMAL.0 as u32,
+      );
+      assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "Marshaling must not materialize content"
+      );
+      result.expect("External COM marshaling must succeed without a read fallback");
+      packet.Seek(0, STREAM_SEEK_SET, None).unwrap();
+      let receiver: IStream = CoUnmarshalInterface(&packet).unwrap();
+      assert_eq!(calls.load(Ordering::Relaxed), 0);
+      assert_eq!(read(&receiver, &mut [0; 6]), (S_OK, 6));
+    }
+    OleUninitialize();
+  }
+}
 
 #[test]
 fn multiple_virtual_files_keep_separate_streams_and_reject_collisions() {
