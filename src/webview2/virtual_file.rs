@@ -50,21 +50,26 @@ pub(super) struct Session {
 pub(super) struct Formats {
   pub descriptor: u16,
   pub contents: u16,
+  pub ignore_contents: u16,
 }
 impl Formats {
   pub fn register() -> Result<Self> {
     let descriptor = unsafe { RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW) } as u16;
     let contents = unsafe { RegisterClipboardFormatW(CFSTR_FILECONTENTS) } as u16;
-    if descriptor == 0 || contents == 0 {
+    let ignore_contents =
+      unsafe { RegisterClipboardFormatW(windows::core::w!("chromium/x-ignore-file-contents")) }
+        as u16;
+    if descriptor == 0 || contents == 0 || ignore_contents == 0 {
       return Err(windows::core::Error::from_thread());
     }
     Ok(Self {
       descriptor,
       contents,
+      ignore_contents,
     })
   }
   pub fn contains(&self, format: u16) -> bool {
-    format == self.descriptor || format == self.contents
+    format == self.descriptor || format == self.contents || format == self.ignore_contents
   }
 }
 
@@ -130,6 +135,27 @@ pub(super) fn install(
     }
     if collision {
       return Err(DV_E_FORMATETC.into());
+    }
+  }
+  // Chromium uses this private marker for Shell files that must not be read
+  // back into browser drag data. Without it, leaving the webview can eagerly
+  // materialize the stream. Keep the original IDataObject identity: replacing
+  // it with a filtered wrapper breaks rejected-drag completion.
+  // See ui/base/dragdrop/os_exchange_data_provider_win.cc in Chromium.
+  unsafe {
+    let memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 1)?;
+    let mut medium = STGMEDIUM {
+      tymed: TYMED_HGLOBAL.0 as u32,
+      u: STGMEDIUM_0 { hGlobal: memory },
+      pUnkForRelease: ManuallyDrop::new(None),
+    };
+    if let Err(error) = data.SetData(
+      &format(formats.ignore_contents, TYMED_HGLOBAL, -1),
+      &medium,
+      true,
+    ) {
+      ReleaseStgMedium(&mut medium);
+      return Err(error);
     }
   }
   let session = Arc::new(Session {

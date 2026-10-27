@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 use super::*;
-use windows::core::Interface;
 use std::sync::atomic::AtomicUsize;
+use windows::core::Interface;
 
 fn fixture(calls: Arc<AtomicUsize>) -> WebView2VirtualFile {
   WebView2VirtualFile {
@@ -139,6 +139,10 @@ fn shell_object_installation_preserves_text_and_stream_outlives_source() {
       let lifetime = install(&original, vec![fixture(calls.clone())], formats).unwrap();
       assert!(lifetime.upgrade().is_some());
       assert_eq!(calls.load(Ordering::Relaxed), 0);
+      assert_eq!(
+        original.QueryGetData(&format(formats.ignore_contents, TYMED_HGLOBAL, -1)),
+        S_OK
+      );
       let content = format(formats.contents, TYMED_ISTREAM, 0);
       let mut medium = original.GetData(&text).unwrap();
       let p = GlobalLock(medium.u.hGlobal).cast::<u16>();
