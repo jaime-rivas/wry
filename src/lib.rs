@@ -393,7 +393,9 @@ pub(crate) mod webview2;
 #[cfg(target_os = "windows")]
 use self::webview2::*;
 #[cfg(target_os = "windows")]
-pub use self::webview2::{register_composition_visual_target, ScrollBarStyle, WebView2FilePaths};
+pub use self::webview2::{
+  register_composition_visual_target, ScrollBarStyle, WebView2FilePaths, WebView2VirtualFile,
+};
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
   ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
@@ -1772,6 +1774,13 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   /// `IDCompositionVisual` (passed as `IUnknown`) instead of the windowed
   /// controller path.
   composition_visual_target: Option<windows::core::IUnknown>,
+  virtual_file_drag_handler: Option<
+    Rc<
+      dyn Fn(
+        &windows::Win32::System::Com::IDataObject,
+      ) -> windows::core::Result<Vec<WebView2VirtualFile>>,
+    >,
+  >,
 }
 
 #[cfg(windows)]
@@ -1789,12 +1798,40 @@ impl Default for PlatformSpecificWebViewAttributes {
       environment: None,
       profile_name: None,
       composition_visual_target: None,
+      virtual_file_drag_handler: None,
     }
   }
 }
 
 #[cfg(windows)]
 pub trait WebViewBuilderExtWindows {
+  /// Add virtual files to genuine browser drags without replacing their HTML
+  /// payload or source loop. The callback runs synchronously on the UI thread
+  /// with the browser's native data object; return an empty list for sources
+  /// that should remain HTML-only. Validate the source and return file metadata
+  /// and lazy readers, without fetching content. An error cancels that drag.
+  ///
+  /// Requires composition hosting and WebView2 CompositionController5. Building
+  /// fails on unsupported runtimes, in windowed mode, or with a native drag-drop
+  /// handler. On a return to this exact webview only the added file formats are
+  /// hidden; external destinations receive the virtual files. The browser keeps
+  /// its original allowed effects and reports DOM drag completion.
+  ///
+  /// This Windows-only API is experimental. Synchronous content reads may block
+  /// the UI. Keep source/credential lifetime in each reader until its last native
+  /// stream is released, independently of window or drag lifetime.
+  /// The most recent native source is retained until the next browser drag,
+  /// navigation, or webview destruction; WebView2 has no native drag-end event.
+  /// The host HWND must not already have an OLE drop target (with Tao, use
+  /// `WindowBuilderExtWindows::with_drag_and_drop(false)`). Composition mode
+  /// currently supports one full-window webview, not `build_as_child`.
+  fn with_virtual_file_drag_handler<F>(self, handler: F) -> Self
+  where
+    F: Fn(
+        &windows::Win32::System::Com::IDataObject,
+      ) -> windows::core::Result<Vec<WebView2VirtualFile>>
+      + 'static;
+
   /// Pass additional args to WebView2 upon creating the webview.
   ///
   /// ## Warning
@@ -1916,6 +1953,16 @@ pub trait WebViewBuilderExtWindows {
 
 #[cfg(windows)]
 impl WebViewBuilderExtWindows for WebViewBuilder<'_> {
+  fn with_virtual_file_drag_handler<F>(mut self, handler: F) -> Self
+  where
+    F: Fn(
+        &windows::Win32::System::Com::IDataObject,
+      ) -> windows::core::Result<Vec<WebView2VirtualFile>>
+      + 'static,
+  {
+    self.platform_specific.virtual_file_drag_handler = Some(Rc::new(handler));
+    self
+  }
   fn with_additional_browser_args<S: Into<String>>(mut self, additional_args: S) -> Self {
     self.platform_specific.additional_browser_args = Some(additional_args.into());
     self

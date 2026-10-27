@@ -11,7 +11,7 @@ readme = "README.md"
 repository = "https://github.com/tauri-apps/wry"
 documentation = "https://docs.rs/wry"
 categories = ["gui"]
-rust-version = "1.77"
+rust-version = "1.82"
 exclude = ["/.changes", "/.github", "/audits", "/wry-logo.svg"]
 
 [package.metadata.docs.rs]
@@ -65,13 +65,13 @@ dirs = "6"
 x11-dl = { version = "2.21" }
 
 [target."cfg(target_os = \"windows\")".dependencies]
-webview2-com = "0.38"
+webview2-com = "0.39.1"
 windows-version = "0.1"
-windows-core = "0.61"
+windows-core = "0.62"
 dunce = "1"
 
 [target."cfg(target_os = \"windows\")".dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
@@ -79,6 +79,8 @@ features = [
   "Win32_System_Com_StructuredStorage",
   "Win32_System_LibraryLoader",
   "Win32_System_Ole",
+  "Win32_System_Memory",
+  "Win32_System_DataExchange",
   "Win32_System_SystemInformation",
   "Win32_System_SystemServices",
   "Win32_UI_Shell",
@@ -222,6 +224,10 @@ libloading = "0.8.9"
 sha2 = "0.10"
 base64 = "0.22"
 dom_query = { version = "0.28.0", default-features = false }
+
+[target.'cfg(windows)'.dev-dependencies.windows]
+version = "0.62"
+features = ["Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_UI_Shell_Common", "Win32_Networking_WinHttp"]
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

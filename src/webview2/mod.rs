@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: MIT
 
 mod composition;
+mod composition_drag;
 mod drag_drop;
 mod ipc;
 mod util;
+mod virtual_file;
 
 pub use composition::register_composition_visual_target;
 pub use ipc::WebView2FilePaths;
+pub use virtual_file::WebView2VirtualFile;
 
 use std::{
   borrow::Cow, cell::RefCell, collections::HashSet, fmt::Write, fs, path::PathBuf, rc::Rc,
@@ -79,14 +82,14 @@ pub(crate) struct InnerWebView {
 
 impl Drop for InnerWebView {
   fn drop(&mut self) {
-    let _ = unsafe { self.controller.Close() };
-    if self.is_child {
-      let _ = unsafe { DestroyWindow(self.hwnd) };
-    }
     if self.is_composition {
       unsafe { composition::detach_host_subclass(*self.parent.borrow()) }
     } else {
       unsafe { Self::dettach_parent_subclass(*self.parent.borrow()) }
+    }
+    let _ = unsafe { self.controller.Close() };
+    if self.is_child {
+      let _ = unsafe { DestroyWindow(self.hwnd) };
     }
   }
 }
@@ -140,6 +143,13 @@ impl InnerWebView {
       .clone()
       .or_else(|| composition::take_registered_visual_target(parent.0 as isize));
     let is_composition = composition_visual.is_some();
+    // This composition host occupies one entire HWND. Child webviews and the
+    // legacy native interceptor have incompatible target/input ownership.
+    if (is_composition && (is_child || attributes.drag_drop_handler.is_some()))
+      || (!is_composition && pl_attrs.virtual_file_drag_handler.is_some())
+    {
+      return Err(windows::core::Error::from(E_INVALIDARG).into());
+    }
 
     let hwnd = if is_composition {
       parent
@@ -648,7 +658,13 @@ impl InnerWebView {
     if is_composition {
       // The composition host subclass owns resize/focus AND forwards
       // mouse/pointer input + cursor to the visual-hosted webview.
-      unsafe { composition::attach_host_subclass(parent, controller)? };
+      unsafe {
+        composition::attach_host_subclass(
+          parent,
+          controller,
+          pl_attrs.virtual_file_drag_handler.clone(),
+        )?
+      };
     } else if !is_child {
       unsafe { Self::attach_parent_subclass(parent, controller) };
     }
@@ -993,7 +1009,9 @@ impl InnerWebView {
     attributes: &mut WebViewAttributes,
     token: &mut EventRegistrationToken,
   ) -> Result<()> {
-    let Some(ipc_handler) = attributes.ipc_handler.take() else { return Ok(()); };
+    let Some(ipc_handler) = attributes.ipc_handler.take() else {
+      return Ok(());
+    };
     unsafe {
       Self::add_script_to_execute_on_document_created(
         webview,

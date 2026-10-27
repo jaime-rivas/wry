@@ -1,0 +1,30 @@
+<!-- Copyright 2020-2023 Tauri Programme within The Commons Conservancy
+     SPDX-License-Identifier: Apache-2.0
+     SPDX-License-Identifier: MIT -->
+<!doctype html><html lang="en"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Unified HTML and virtual-file dragging</title>
+<style>body{font:16px system-ui;margin:24px}#source,#baseline,#target,#reject{padding:20px;margin:12px 0;border:2px solid #777}#source{background:#ddd5f4;cursor:grab}#baseline{background:#eee}#target{background:#d2eee0}#reject{background:#f4d5d5}pre{white-space:pre-wrap;max-height:200px;overflow:auto}</style>
+<h1>Wry unified drag test</h1>
+<p>The same purple item works inside this window and as a virtual file in Explorer. Ctrl: copy; Shift: move; Ctrl+Shift: link.</p>
+<div id="source" draggable="true">Repository item — internal identity / external delayed file</div>
+<div id="baseline" draggable="true">HTML-only baseline — no virtual file</div>
+<div id="target">Accepting HTML target — also accepts Explorer files and folders</div>
+<div id="reject">Rejecting target</div>
+<pre id="log"></pre>
+<script>
+const mime='application/x-wry-example-item';
+function send(message,files){const text=JSON.stringify(message);document.querySelector('#log').textContent=text+'\n'+document.querySelector('#log').textContent.slice(0,7000);try{window.ipc.postMessage(text,files)}catch(e){document.querySelector('#log').textContent=String(e)+'\n'+text}}
+for(const id of ['source','baseline']){
+  const element=document.getElementById(id);
+  element.addEventListener('dragstart',e=>{const identity=id==='source'?'repository:item-1':'baseline:item-1';e.dataTransfer.setData(mime,identity);e.dataTransfer.setData('text/plain',identity);e.dataTransfer.effectAllowed='all';send({action:'dragstart',source:id,trusted:e.isTrusted})});
+  element.addEventListener('dragend',e=>send({action:'dragend',source:id,trusted:e.isTrusted,effect:e.dataTransfer.dropEffect}));
+}
+function effect(e){return e.ctrlKey&&e.shiftKey?'link':e.ctrlKey?'copy':e.shiftKey?'move':e.dataTransfer.types.includes('Files')?'copy':'move'}
+const target=document.getElementById('target');
+target.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect=effect(e)});
+target.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.dropEffect=effect(e);const files=Array.from(e.dataTransfer.files);send({action:'drop',trusted:e.isTrusted,custom:e.dataTransfer.getData(mime),effect:e.dataTransfer.dropEffect,files:files.map(f=>({name:f.name,size:f.size})),entries:Array.from(e.dataTransfer.items,i=>{const entry=i.webkitGetAsEntry();return entry?{name:entry.name,directory:entry.isDirectory}:null})},files)});
+document.addEventListener('dragover',e=>{if(!target.contains(e.target)){e.preventDefault();e.dataTransfer.dropEffect='none'}});
+document.addEventListener('drop',e=>e.preventDefault());
+send({action:'ready',additionalObjects:typeof window.chrome?.webview?.postMessageWithAdditionalObjects==='function'});
+</script></html>

@@ -104,6 +104,7 @@ pub(crate) fn take_registered_visual_target(hwnd: isize) -> Option<IUnknown> {
 /// freed on `WM_DESTROY`/[`COMPOSITION_DESTROY_MESSAGE`] with the same
 /// null-out-refdata double-free guard the parent subclass uses.
 struct CompositionHost {
+  _drag: super::composition_drag::Registration,
   controller: ICoreWebView2Controller,
   comp_controller: ICoreWebView2CompositionController,
   /// `ICoreWebView2Environment3` when available — required to build
@@ -208,6 +209,7 @@ pub fn create_composition_controller(
 pub unsafe fn attach_host_subclass(
   parent: HWND,
   controller: &ICoreWebView2Controller,
+  handler: Option<super::composition_drag::SourceHandler>,
 ) -> Result<()> {
   let comp_controller: ICoreWebView2CompositionController =
     controller.cast().map_err(windows::core::Error::from)?;
@@ -226,6 +228,7 @@ pub unsafe fn attach_host_subclass(
   let default_cursor = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
 
   let host = Box::new(CompositionHost {
+    _drag: super::composition_drag::Registration::new(parent, &comp_controller, handler)?,
     controller: controller.clone(),
     comp_controller: comp_controller.clone(),
     env3,
