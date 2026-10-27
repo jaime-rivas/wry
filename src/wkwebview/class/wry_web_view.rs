@@ -25,6 +25,8 @@ use objc2_web_kit::WKWebView;
 
 pub struct WryWebViewIvars {
   pub(crate) is_child: bool,
+  #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+  pub(crate) drag_source: crate::wkwebview::drag_source::Source,
   #[cfg(target_os = "macos")]
   pub(crate) drag_drop_handler: Box<dyn Fn(DragDropEvent) -> bool>,
   #[cfg(target_os = "macos")]
@@ -76,6 +78,23 @@ define_class!(
   // Drag & Drop
   #[cfg(target_os = "macos")]
   unsafe impl NSDraggingDestination for WryWebView {
+    #[cfg(feature = "macos-private-drag")]
+    #[unsafe(method(prepareForDragOperation:))]
+    fn prepare_drag(&self, info: &ProtocolObject<dyn objc2_app_kit::NSDraggingInfo>) -> Bool {
+      let local = crate::wkwebview::drag_source::local_info(self, info);
+      let info = local.as_deref().unwrap_or(info);
+      unsafe { objc2::msg_send![super(self), prepareForDragOperation: info] }
+    }
+    #[cfg(feature = "macos-private-drag")]
+    #[unsafe(method(concludeDragOperation:))]
+    fn conclude_drag(&self, info: Option<&ProtocolObject<dyn objc2_app_kit::NSDraggingInfo>>) {
+      let local = info.and_then(|info| crate::wkwebview::drag_source::local_info(self, info));
+      let info = local.as_deref().or(info);
+      unsafe {
+        let _: () = objc2::msg_send![super(self), concludeDragOperation: info];
+      }
+    }
+
     #[unsafe(method(draggingEntered:))]
     fn dragging_entered(
       &self,

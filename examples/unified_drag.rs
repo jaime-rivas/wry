@@ -153,7 +153,93 @@ fn main() -> wry::Result<()> {
   });
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, all(target_os = "macos", feature = "macos-private-drag"))))]
 fn main() {
   eprintln!("The unified drag example currently requires Windows.");
+}
+
+#[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+#[path = "support/macos_file_promise.rs"]
+mod macos_file_promise;
+
+#[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+fn main() -> wry::Result<()> {
+  use objc2_foundation::{ns_string, MainThreadMarker};
+  use std::{cell::Cell, io::Read};
+  use tao::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+  };
+  use wry::{DragDropEvent, WebViewBuilder, WebViewBuilderExtMacos};
+  let remote = std::env::args().any(|arg| arg == "--remote");
+  let event_loop = EventLoop::new();
+  let window = WindowBuilder::new()
+    .with_title("Wry — unified macOS drag (private WebKit API)")
+    .build(&event_loop)
+    .unwrap();
+  let session = Cell::new(0u64);
+  let webview = WebViewBuilder::new()
+    .with_native_drag_source_handler(move |pasteboard, placeholder| {
+      let matches = pasteboard
+        .stringForType(ns_string!("public.utf8-plain-text"))
+        .is_some_and(|text| text.to_string() == "repository:item-1");
+      let id = session.get() + 1;
+      session.set(id);
+      println!("SOURCE session={id} augment={matches} remote={remote}");
+      if !matches {
+        return None;
+      }
+      Some(wry::MacosDragSource {
+        items: vec![macos_file_promise::item(
+          placeholder,
+          remote,
+          id,
+          MainThreadMarker::new().unwrap(),
+        )],
+        local_operations: objc2_app_kit::NSDragOperation::Copy
+          | objc2_app_kit::NSDragOperation::Move
+          | objc2_app_kit::NSDragOperation::Link,
+      })
+    })
+    .with_drag_drop_handler(|event| {
+      if let DragDropEvent::Drop { paths, .. } = event {
+        println!("NATIVE_DROP paths={paths:?}");
+        for path in paths {
+          let observed = (|| -> std::io::Result<_> {
+            let metadata = std::fs::metadata(&path)?;
+            let mut bytes = [0; 32];
+            let count = if metadata.is_file() {
+              std::fs::File::open(&path)?.read(&mut bytes)?
+            } else {
+              0
+            };
+            Ok((metadata.is_dir(), count))
+          })();
+          println!("FILE path={path:?} access={observed:?}");
+        }
+      }
+      false
+    })
+    .with_html(include_str!("unified-drag.html"))
+    .with_navigation_handler(|url| url == "about:blank" || url.starts_with("data:text/html;"))
+    .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+    .with_ipc_handler(|request| {
+      if request.uri() == "about:blank" {
+        println!("DOM {}", request.body());
+      }
+    })
+    .build(&window)?;
+  println!("MODE remote={remote} READY_WAITING_FOR_DOM");
+  event_loop.run(move |event, _, flow| {
+    *flow = ControlFlow::Wait;
+    if let Event::WindowEvent {
+      event: WindowEvent::CloseRequested,
+      ..
+    } = event
+    {
+      *flow = ControlFlow::Exit;
+    }
+    let _ = &webview;
+  });
 }

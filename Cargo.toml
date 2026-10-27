@@ -29,6 +29,8 @@ serde = ["dpi/serde"]
 devtools = []
 linux-body = ["webkit2gtk/v2_40", "os-webview"]
 mac-proxy = []
+# Private WebKit drag-source customization, requires macOS 27 at runtime.
+macos-private-drag = ["objc2-app-kit/block2", "objc2-app-kit/NSDraggingItem", "objc2-app-kit/NSDraggingSession", "objc2-app-kit/NSFilePromiseProvider", "objc2-app-kit/NSImage", "objc2-foundation/NSOperation", "objc2-foundation/NSError"]
 os-webview = [
   "javascriptcore-rs",
   "webkit2gtk",

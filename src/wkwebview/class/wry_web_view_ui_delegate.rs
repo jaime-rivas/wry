@@ -95,6 +95,29 @@ define_class!(
 
   unsafe impl NSObjectProtocol for WryWebViewUIDelegate {}
 
+  #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+  impl WryWebViewUIDelegate {
+    #[unsafe(method(_webView:sourceOperationMaskForDraggingContext:defaultOperationMask:))]
+    fn drag_mask(
+      &self,
+      view: &WryWebView,
+      context: objc2_app_kit::NSDraggingContext,
+      default: objc2_app_kit::NSDragOperation,
+    ) -> objc2_app_kit::NSDragOperation {
+      crate::wkwebview::drag_source::operation_mask(view, context, default)
+    }
+    #[unsafe(method(_webView:draggingItemsForDraggingItem:atLocation:completionHandler:))]
+    fn dragging_items(
+      &self,
+      webview: &WryWebView,
+      item: &objc2_app_kit::NSDraggingItem,
+      _location: objc2_foundation::NSPoint,
+      completion: &Block<dyn Fn(*const NSArray<objc2_app_kit::NSDraggingItem>)>,
+    ) {
+      crate::wkwebview::drag_source::start(webview, item, completion);
+    }
+  }
+
   unsafe impl WKUIDelegate for WryWebViewUIDelegate {
     #[cfg(target_os = "macos")]
     #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]

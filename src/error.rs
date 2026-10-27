@@ -5,6 +5,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+  #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+  #[error("native HTML drag augmentation requires the private macOS 27 WebKit source hook")]
+  MacosDragSourceUnavailable,
   #[cfg(gtk)]
   #[error(transparent)]
   GlibError(#[from] gtk::glib::Error),

@@ -383,6 +383,8 @@ use objc2_app_kit::NSWindow;
 use objc2_web_kit::WKUserContentController;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod wkwebview;
+#[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+pub use wkwebview::drag_source::MacosDragSource;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use wkwebview::*;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1597,6 +1599,8 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   limit_navigations_to_app_bound_domains: bool,
   #[cfg(target_os = "macos")]
   webview_configuration: Option<Retained<objc2_web_kit::WKWebViewConfiguration>>,
+  #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+  drag_source_handler: Option<Box<wkwebview::drag_source::SourceHandler>>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1614,6 +1618,8 @@ impl Default for PlatformSpecificWebViewAttributes {
       limit_navigations_to_app_bound_domains: false,
       #[cfg(target_os = "macos")]
       webview_configuration: None,
+      #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+      drag_source_handler: None,
     }
   }
 }
@@ -1670,6 +1676,24 @@ impl WebViewBuilderExtDarwin for WebViewBuilder<'_> {
 
 #[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
+  /// Supply native representations for a genuine HTML drag, keeping WebKit's
+  /// source session and original HTML payload for drops back into this webview.
+  /// Return `None` for ordinary browser drags. Only handle application
+  /// custom-data sources: reading file-backed pasteboard types may fetch content.
+  ///
+  /// Experimental: requires the `macos-private-drag` feature and a private
+  /// WebKit API introduced in macOS 27. Building fails if the hook is absent.
+  /// This is not a public OS compatibility guarantee or App Store-safe API.
+  /// Providers must own their delegates and content independently of the window
+  /// and session. The handler runs on the UI thread and must not fetch content.
+  /// Only the exact source webview receives the preserved HTML representation;
+  /// other windows and applications receive the supplied native items.
+  #[cfg(feature = "macos-private-drag")]
+  fn with_native_drag_source_handler<F>(self, handler: F) -> Self
+  where
+    F: Fn(&objc2_app_kit::NSPasteboard, &objc2_app_kit::NSDraggingItem) -> Option<MacosDragSource>
+      + 'static;
+
   /// Set the webview configuration that must be used to create the new webview.
   fn with_webview_configuration(
     self,
@@ -1679,6 +1703,16 @@ pub trait WebViewBuilderExtMacos {
 
 #[cfg(target_os = "macos")]
 impl WebViewBuilderExtMacos for WebViewBuilder<'_> {
+  #[cfg(feature = "macos-private-drag")]
+  fn with_native_drag_source_handler<F>(mut self, handler: F) -> Self
+  where
+    F: Fn(&objc2_app_kit::NSPasteboard, &objc2_app_kit::NSDraggingItem) -> Option<MacosDragSource>
+      + 'static,
+  {
+    self.platform_specific.drag_source_handler = Some(Box::new(handler));
+    self
+  }
+
   fn with_webview_configuration(
     mut self,
     configuration: Retained<objc2_web_kit::WKWebViewConfiguration>,

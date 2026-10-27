@@ -5,6 +5,8 @@
 mod download;
 #[cfg(target_os = "macos")]
 mod drag_drop;
+#[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+pub(crate) mod drag_source;
 mod navigation;
 #[cfg(feature = "mac-proxy")]
 mod proxy;
@@ -301,6 +303,8 @@ impl InnerWebView {
       let manager = config.userContentController();
       let webview = WryWebView::alloc(mtm).set_ivars(WryWebViewIvars {
         is_child,
+        #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+        drag_source: drag_source::Source::new(pl_attrs.drag_source_handler),
         #[cfg(target_os = "macos")]
         drag_drop_handler: match attributes.drag_drop_handler {
           Some(handler) => handler,
@@ -595,6 +599,15 @@ impl InnerWebView {
 
       let proto_navigation_policy_delegate = ProtocolObject::from_ref(&*navigation_policy_delegate);
       webview.setNavigationDelegate(Some(proto_navigation_policy_delegate));
+
+      #[cfg(all(target_os = "macos", feature = "macos-private-drag"))]
+      if webview.ivars().drag_source.handler.is_some()
+        && !webview.respondsToSelector(
+          objc2::sel!(_web_draggingItemsForDraggingItem:atLocation:completionHandler:),
+        )
+      {
+        return Err(crate::Error::MacosDragSourceUnavailable);
+      }
 
       let ui_delegate: Retained<WryWebViewUIDelegate> = WryWebViewUIDelegate::new(
         mtm,
