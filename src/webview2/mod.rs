@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 mod drag_drop;
+mod ipc;
 mod util;
+
+pub use ipc::WebView2FilePaths;
 
 use std::{
   borrow::Cow,
@@ -964,7 +967,7 @@ impl InnerWebView {
       Self::add_script_to_execute_on_document_created(
         webview,
         String::from(
-          r#"Object.defineProperty(window, 'ipc', { value: Object.freeze({ postMessage: s => window.chrome.webview.postMessage(s) }) });"#,
+          r#"Object.defineProperty(window, 'ipc', { value: Object.freeze({ postMessage: (s, objects) => objects === undefined ? window.chrome.webview.postMessage(s) : window.chrome.webview.postMessageWithAdditionalObjects(s, objects) }) });"#,
         ),
       )?;
 
@@ -990,7 +993,12 @@ impl InnerWebView {
           let _span = tracing::info_span!(parent: None, "wry::ipc::handle").entered();
 
           match Request::builder().uri(url).body(js) {
-            Ok(request) => ipc_handler(request),
+            Ok(mut request) => {
+              if let Some(files) = ipc::file_paths(&args) {
+                request.extensions_mut().insert(files);
+              }
+              ipc_handler(request);
+            }
             Err(_error) => {
               #[cfg(feature = "tracing")]
               tracing::warn!("WebView received invalid IPC request: {_error}")

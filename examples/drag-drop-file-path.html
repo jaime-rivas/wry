@@ -1,0 +1,64 @@
+<!-- Copyright 2020-2023 Tauri Programme within The Commons Conservancy
+     SPDX-License-Identifier: Apache-2.0
+     SPDX-License-Identifier: MIT -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>HTML drops with native file access</title>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  #source, #target { padding: 28px; margin: 20px 0; border: 2px solid #777; }
+  #source { background: #ddd5f4; cursor: grab; }
+  #target { background: #d2eee0; min-height: 80px; }
+  pre { white-space: pre-wrap; max-height: 240px; overflow: auto; }
+</style>
+<h1>HTML drops with native file access</h1>
+<p>Drag test files and folders from Explorer onto green. Rust logs their native paths and read-only access.</p>
+<div id="source" draggable="true">Repository item — drag to green (Ctrl: copy, Shift: move, Ctrl+Shift: link)</div>
+<div id="target">HTML drop target</div>
+<button id="ordinary">Send ordinary IPC</button>
+<button id="synthetic">Send a JavaScript-created File (expect no native path)</button>
+<pre id="log"></pre>
+<script>
+const mime = 'application/x-wry-example-item';
+const source = document.querySelector('#source'), target = document.querySelector('#target');
+function send(message, files) {
+  const text = JSON.stringify(message);
+  document.querySelector('#log').textContent = text + '\n' + document.querySelector('#log').textContent.slice(0, 6000);
+  try { window.ipc.postMessage(text, files); }
+  catch (error) { document.querySelector('#log').textContent = String(error) + '\n' + text; }
+}
+source.addEventListener('dragstart', event => {
+  event.dataTransfer.setData(mime, 'repository:item-1');
+  event.dataTransfer.effectAllowed = 'all';
+  send({action: 'dragstart', trusted: event.isTrusted});
+});
+function effect(event) {
+  if (event.ctrlKey && event.shiftKey) return 'link';
+  if (event.ctrlKey) return 'copy';
+  if (event.shiftKey) return 'move';
+  return event.dataTransfer.types.includes('Files') ? 'copy' : 'move';
+}
+target.addEventListener('dragover', event => {
+  event.preventDefault(); event.dataTransfer.dropEffect = effect(event);
+});
+target.addEventListener('drop', event => {
+  event.preventDefault(); event.dataTransfer.dropEffect = effect(event);
+  // Capture genuine File objects before the drop's protected store is cleared.
+  const files = Array.from(event.dataTransfer.files);
+  send({action: 'drop', trusted: event.isTrusted, custom: event.dataTransfer.getData(mime),
+    effect: event.dataTransfer.dropEffect, files: files.map(file => ({name: file.name, size: file.size})),
+    entries: Array.from(event.dataTransfer.items, item => {
+      const entry = item.webkitGetAsEntry();
+      return entry ? {name: entry.name, directory: entry.isDirectory} : null;
+    })}, files);
+});
+source.addEventListener('dragend', event => send({action: 'dragend', trusted: event.isTrusted, effect: event.dataTransfer.dropEffect}));
+document.addEventListener('dragover', event => event.preventDefault());
+document.addEventListener('drop', event => event.preventDefault());
+document.querySelector('#ordinary').onclick = () => send({action: 'ordinary'});
+document.querySelector('#synthetic').onclick = () => send({action: 'synthetic'}, [new File(['test'], 'synthetic.txt')]);
+send({action: 'ready', additionalObjects: typeof window.chrome?.webview?.postMessageWithAdditionalObjects === 'function'});
+</script>
+</html>
