@@ -4,9 +4,11 @@
 
 mod composition;
 mod drag_drop;
+mod ipc;
 mod util;
 
 pub use composition::register_composition_visual_target;
+pub use ipc::WebView2FilePaths;
 
 use std::{
   borrow::Cow, cell::RefCell, collections::HashSet, fmt::Write, fs, path::PathBuf, rc::Rc,
@@ -991,53 +993,56 @@ impl InnerWebView {
     attributes: &mut WebViewAttributes,
     token: &mut EventRegistrationToken,
   ) -> Result<()> {
-    Self::add_script_to_execute_on_document_created(
-      webview,
-      String::from(
-        r#"Object.defineProperty(window, 'ipc', { value: Object.freeze({ postMessage: s=> window.chrome.webview.postMessage(s) }) });"#,
-      ),
-    )?;
+    let Some(ipc_handler) = attributes.ipc_handler.take() else { return Ok(()); };
+    unsafe {
+      Self::add_script_to_execute_on_document_created(
+        webview,
+        String::from(
+          r#"Object.defineProperty(window, 'ipc', { value: Object.freeze({ postMessage: (s, objects) => objects === undefined ? window.chrome.webview.postMessage(s) : window.chrome.webview.postMessageWithAdditionalObjects(s, objects) }) });"#,
+        ),
+      )?;
 
-    let Some(ipc_handler) = attributes.ipc_handler.take() else {
-      return Ok(());
-    };
-    webview.add_WebMessageReceived(
-      &WebMessageReceivedEventHandler::create(Box::new(move |webview, args| {
-        let (Some(webview), Some(args)) = (webview, args) else {
-          return Ok(());
-        };
+      webview.add_WebMessageReceived(
+        &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+          let Some(args) = args else {
+            return Ok(());
+          };
 
-        let _ = handle_file_path_query(webview, &args);
+          let url = {
+            let mut url = PWSTR::null();
+            args.Source(&mut url)?;
+            take_pwstr(url)
+          };
 
-        let url = {
-          let mut url = PWSTR::null();
-          args.Source(&mut url)?;
-          take_pwstr(url)
-        };
+          let js = {
+            let mut js = PWSTR::null();
+            args.TryGetWebMessageAsString(&mut js)?;
+            take_pwstr(js)
+          };
 
-        let js = {
-          let mut js = PWSTR::null();
-          args.TryGetWebMessageAsString(&mut js)?;
-          take_pwstr(js)
-        };
+          #[cfg(feature = "tracing")]
+          let _span = tracing::info_span!(parent: None, "wry::ipc::handle").entered();
 
-        #[cfg(feature = "tracing")]
-        let _span = tracing::info_span!(parent: None, "wry::ipc::handle").entered();
-
-        match Request::builder().uri(url).body(js) {
-          Ok(request) => ipc_handler(request),
-          Err(_error) => {
-            #[cfg(feature = "tracing")]
-            tracing::warn!("WebView received invalid IPC request: {_error}")
+          match Request::builder().uri(url).body(js) {
+            Ok(mut request) => {
+              if let Some(files) = ipc::file_paths(&args) {
+                request.extensions_mut().insert(files);
+              }
+              ipc_handler(request);
+            }
+            Err(_error) => {
+              #[cfg(feature = "tracing")]
+              tracing::warn!("WebView received invalid IPC request: {_error}")
+            }
           }
-        }
 
-        Ok(())
-      })),
-      token,
-    )?;
+          Ok(())
+        })),
+        token,
+      )?;
 
-    Ok(())
+      Ok(())
+    }
   }
 
   #[inline]
@@ -1479,29 +1484,6 @@ impl InnerWebView {
 
     Ok(())
   }
-}
-
-fn handle_file_path_query(
-  webview: ICoreWebView2,
-  args: &ICoreWebView2WebMessageReceivedEventArgs,
-) -> windows_core::Result<()> {
-  if let Ok(args2) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() {
-    let objs = unsafe { args2.AdditionalObjects() }?;
-    let mut count = 0;
-    unsafe { objs.Count(&mut count)? };
-
-    let mut out = Vec::with_capacity(count as _);
-
-    for idx in 0..count {
-      let file: ICoreWebView2File = unsafe { objs.GetValueAtIndex(idx) }?.cast()?;
-      let mut path = PWSTR::null();
-      unsafe { file.Path(&mut path)? };
-      let path = take_pwstr(path);
-      out.push(path);
-    }
-    InnerWebView::execute_script(&webview, &format!("console.log({out:?})"), |_| {})?;
-  }
-  Ok(())
 }
 
 /// Public APIs

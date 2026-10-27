@@ -391,11 +391,9 @@ pub use wkwebview::{PrintMargin, PrintOptions, WryWebView};
 #[cfg(target_os = "windows")]
 pub(crate) mod webview2;
 #[cfg(target_os = "windows")]
-pub use self::webview2::register_composition_visual_target;
-#[cfg(target_os = "windows")]
-pub use self::webview2::ScrollBarStyle;
-#[cfg(target_os = "windows")]
 use self::webview2::*;
+#[cfg(target_os = "windows")]
+pub use self::webview2::{register_composition_visual_target, ScrollBarStyle, WebView2FilePaths};
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
   ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
@@ -1173,7 +1171,16 @@ impl<'a> WebViewBuilder<'a> {
   ///
   /// ## Platform-specific
   ///
-  /// - **Linux / Android**: The request URL is not supported on iframes and the main frame URL is used instead.
+  /// - **Windows**: `window.ipc.postMessage(message, files)` also accepts an array of DOM `File`
+  ///   objects. Their native paths are delivered in a `WebView2FilePaths` request extension.
+  ///   This requires WebView2's `postMessageWithAdditionalObjects` API; unsupported runtimes
+  ///   throw a JavaScript error when the second argument is supplied. Ordinary string messages
+  ///   are unchanged. For drag-and-drop, capture `Array.from(event.dataTransfer.files)` during
+  ///   the `drop` event, before awaiting asynchronous work. Do not install a native drag-drop
+  ///   handler when relying on HTML drops on Windows.
+  /// - **Linux**: The request URL is not supported on iframes and the main frame URL is used instead.
+  /// - **Android**: Messages from iframes use the iframe's origin instead of its URL, and opaque origins use `about:blank`.
+  ///   WebViews without `WebViewFeature.WEB_MESSAGE_LISTENER` use the tracked main frame URL for every frame, which may be stale or `about:blank` until `onPageStarted` runs.
   pub fn with_ipc_handler<F>(mut self, handler: F) -> Self
   where
     F: Fn(Request<String>) + 'static,
