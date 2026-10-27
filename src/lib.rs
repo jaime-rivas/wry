@@ -1180,9 +1180,7 @@ impl<'a> WebViewBuilder<'a> {
   ///   are unchanged. For drag-and-drop, capture `Array.from(event.dataTransfer.files)` during
   ///   the `drop` event, before awaiting asynchronous work. Do not install a native drag-drop
   ///   handler when relying on HTML drops on Windows.
-  /// - **Linux**: The request URL is not supported on iframes and the main frame URL is used instead.
-  /// - **Android**: Messages from iframes use the iframe's origin instead of its URL, and opaque origins use `about:blank`.
-  ///   WebViews without `WebViewFeature.WEB_MESSAGE_LISTENER` use the tracked main frame URL for every frame, which may be stale or `about:blank` until `onPageStarted` runs.
+  /// - **Linux / Android**: The request URL is not supported on iframes and the main frame URL is used instead.
   pub fn with_ipc_handler<F>(mut self, handler: F) -> Self
   where
     F: Fn(Request<String>) + 'static,
@@ -1813,15 +1811,18 @@ pub trait WebViewBuilderExtWindows {
   ///
   /// Requires composition hosting and WebView2 CompositionController5. Building
   /// fails on unsupported runtimes, in windowed mode, or with a native drag-drop
-  /// handler. On a return to this exact webview only the added file formats are
-  /// hidden; external destinations receive the virtual files. The browser keeps
-  /// its original allowed effects and reports DOM drag completion.
+  /// handler. Native targets receive the original browser data object with added
+  /// virtual-file formats. The browser keeps its source loop, allowed effects,
+  /// and DOM drag completion.
+  ///
+  /// This uses Chromium's private `chromium/x-ignore-file-contents` clipboard
+  /// marker to prevent browser-side eager reads during hover and cancellation.
+  /// This is not a public WebView2 compatibility guarantee; qualify runtime
+  /// updates before relying on the deferred-read behavior.
   ///
   /// This Windows-only API is experimental. Synchronous content reads may block
   /// the UI. Keep source/credential lifetime in each reader until its last native
   /// stream is released, independently of window or drag lifetime.
-  /// The most recent native source is retained until the next browser drag,
-  /// navigation, or webview destruction; WebView2 has no native drag-end event.
   /// The host HWND must not already have an OLE drop target (with Tao, use
   /// `WindowBuilderExtWindows::with_drag_and_drop(false)`). Composition mode
   /// currently supports one full-window webview, not `build_as_child`.
